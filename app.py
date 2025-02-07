@@ -1,7 +1,9 @@
 from fastapi import FastAPI, Request, HTTPException
-import aiohttp
-import logging
 import os
+import logging
+import requests
+import aiohttp
+import asyncio  # Added this import
 from typing import Dict, Any
 
 # Setup logging
@@ -88,7 +90,6 @@ async def distribute_signal(signal):
 
 @app.post("/signal")
 async def process_signal(signal: Dict[Any, Any]):
-    """Process incoming trading signal"""
     try:
         # Distribute signal to all services
         results = await distribute_signal(signal)
@@ -101,7 +102,6 @@ async def process_signal(signal: Dict[Any, Any]):
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
     return {
         "status": "healthy",
         "service": "signal-processor",
