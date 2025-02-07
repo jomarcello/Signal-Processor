@@ -25,11 +25,11 @@ for var in required_env_vars:
     if not os.getenv(var):
         raise RuntimeError(f"Missing required environment variable: {var}")
 
-def get_full_url(url: str) -> str:
-    """Ensure URL starts with https://"""
-    if not url.startswith('http'):
-        return f"https://{url}"
-    return url
+def get_full_url(url: str, endpoint: str = "") -> str:
+    """Ensure URL starts with https:// and has correct endpoint"""
+    if not url.startswith(('http://', 'https://')):
+        url = f"https://{url}"
+    return f"{url.rstrip('/')}/{endpoint.lstrip('/')}"
 
 async def distribute_signal(signal):
     """Distribute signal to all services"""
@@ -37,41 +37,47 @@ async def distribute_signal(signal):
         logger.info(f"Starting to distribute signal: {signal}")
         
         # Get service URLs from environment and ensure they have https://
-        telegram_url = get_full_url(os.getenv('TELEGRAM_SERVICE_URL'))
-        ai_signal_url = get_full_url(os.getenv('AI_SIGNAL_SERVICE_URL'))
-        news_ai_url = get_full_url(os.getenv('NEWS_AI_SERVICE_URL'))
-        subscriber_matcher_url = get_full_url(os.getenv('SUBSCRIBER_MATCHER_URL'))
+        telegram_url = get_full_url(os.getenv('TELEGRAM_SERVICE_URL'), 'send')
+        ai_signal_url = get_full_url(os.getenv('AI_SIGNAL_SERVICE_URL'), 'analyze')
+        news_ai_url = get_full_url(os.getenv('NEWS_AI_SERVICE_URL'), 'analyze')
+        subscriber_matcher_url = get_full_url(os.getenv('SUBSCRIBER_MATCHER_URL'), 'match')
         
         logger.info(f"Using URLs: Telegram={telegram_url}, AI={ai_signal_url}, News={news_ai_url}, Matcher={subscriber_matcher_url}")
         
-        # Send to all services concurrently
+        # Send to subscriber matcher first to get chat_ids
         async with aiohttp.ClientSession() as session:
+            try:
+                async with session.post(subscriber_matcher_url, json=signal) as resp:
+                    if resp.status == 200:
+                        subscriber_data = await resp.json()
+                        chat_ids = subscriber_data.get('matched_subscribers', [])
+                        signal['chat_ids'] = [sub['chat_id'] for sub in chat_ids]
+                    else:
+                        error_text = await resp.text()
+                        logger.error(f"Subscriber matcher error: {error_text}")
+            except Exception as e:
+                logger.error(f"Error calling subscriber matcher: {str(e)}")
+            
+            # Now send to other services with chat_ids
             tasks = []
             
             # Send to AI Signal Service
             tasks.append(session.post(
-                f"{ai_signal_url}/analyze",
-                json=signal,
-                ssl=False  # Added to handle SSL verification issues
-            ))
-            
-            # Send to News AI Service
-            tasks.append(session.post(
-                f"{news_ai_url}/analyze",
+                ai_signal_url,
                 json=signal,
                 ssl=False
             ))
             
-            # Send to Subscriber Matcher
+            # Send to News AI Service
             tasks.append(session.post(
-                f"{subscriber_matcher_url}/match",
+                news_ai_url,
                 json=signal,
                 ssl=False
             ))
             
             # Send to Telegram Service
             tasks.append(session.post(
-                f"{telegram_url}/send",
+                telegram_url,
                 json=signal,
                 ssl=False
             ))
@@ -107,6 +113,7 @@ async def distribute_signal(signal):
 
 @app.post("/signal")
 async def process_signal(signal: Dict[Any, Any]):
+    """Process incoming trading signal"""
     try:
         # Validate required fields
         required_fields = ["symbol", "action", "price", "stopLoss", "takeProfit", "interval"]
@@ -146,9 +153,9 @@ async def health_check():
             health_status["status"] = "degraded"
         else:
             try:
-                url = get_full_url(url)
+                url = get_full_url(url, "health")
                 async with aiohttp.ClientSession() as session:
-                    async with session.get(f"{url}/health", ssl=False) as response:
+                    async with session.get(url, ssl=False) as response:
                         if response.status == 200:
                             health_status["dependencies"][service] = "healthy"
                         else:
