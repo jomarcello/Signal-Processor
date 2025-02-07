@@ -27,9 +27,17 @@ for var in required_env_vars:
 
 def get_full_url(url: str, endpoint: str = "") -> str:
     """Ensure URL starts with https:// and has correct endpoint"""
-    if not url.startswith(('http://', 'https://')):
-        url = f"https://{url}"
-    return f"{url.rstrip('/')}/{endpoint.lstrip('/')}"
+    # Remove any trailing slashes from URL and leading slashes from endpoint
+    base_url = url.rstrip('/')
+    
+    # Add https:// if needed
+    if not base_url.startswith(('http://', 'https://')):
+        base_url = f"https://{base_url}"
+        
+    # Only add endpoint if it's provided
+    if endpoint:
+        return f"{base_url}/{endpoint.lstrip('/')}"
+    return base_url
 
 async def distribute_signal(signal):
     """Distribute signal to all services"""
@@ -37,17 +45,17 @@ async def distribute_signal(signal):
         logger.info(f"Starting to distribute signal: {signal}")
         
         # Get service URLs from environment and ensure they have https://
-        telegram_url = get_full_url(os.getenv('TELEGRAM_SERVICE_URL'), 'send')
-        ai_signal_url = get_full_url(os.getenv('AI_SIGNAL_SERVICE_URL'), 'analyze')
-        news_ai_url = get_full_url(os.getenv('NEWS_AI_SERVICE_URL'), 'analyze')
-        subscriber_matcher_url = get_full_url(os.getenv('SUBSCRIBER_MATCHER_URL'), 'match')
+        telegram_url = get_full_url(os.getenv('TELEGRAM_SERVICE_URL'))
+        ai_signal_url = get_full_url(os.getenv('AI_SIGNAL_SERVICE_URL'))
+        news_ai_url = get_full_url(os.getenv('NEWS_AI_SERVICE_URL'))
+        subscriber_matcher_url = get_full_url(os.getenv('SUBSCRIBER_MATCHER_URL'))
         
         logger.info(f"Using URLs: Telegram={telegram_url}, AI={ai_signal_url}, News={news_ai_url}, Matcher={subscriber_matcher_url}")
         
         # Send to subscriber matcher first to get chat_ids
         async with aiohttp.ClientSession() as session:
             try:
-                async with session.post(subscriber_matcher_url, json=signal) as resp:
+                async with session.post(f"{subscriber_matcher_url}/match", json=signal) as resp:
                     if resp.status == 200:
                         subscriber_data = await resp.json()
                         chat_ids = subscriber_data.get('matched_subscribers', [])
@@ -63,21 +71,21 @@ async def distribute_signal(signal):
             
             # Send to AI Signal Service
             tasks.append(session.post(
-                ai_signal_url,
+                f"{ai_signal_url}/analyze",
                 json=signal,
                 ssl=False
             ))
             
             # Send to News AI Service
             tasks.append(session.post(
-                news_ai_url,
+                f"{news_ai_url}/analyze",
                 json=signal,
                 ssl=False
             ))
             
             # Send to Telegram Service
             tasks.append(session.post(
-                telegram_url,
+                f"{telegram_url}/send",
                 json=signal,
                 ssl=False
             ))
